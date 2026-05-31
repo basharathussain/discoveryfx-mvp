@@ -44,3 +44,17 @@ class ProductListOut(BaseModel):
     total: int
     page: int
     page_size: int
+
+
+class SearchSupplierRequest(BaseModel):
+    query: str
+    sources: list[str] = ["aliexpress_uk", "amazon_uk"]
+    limit_per_source: int = 30
+
+
+class SearchSupplierResponse(BaseModel):
+    query: str
+    inserted: int                # new rows persisted
+    skipped: int                 # already known (source, external_id) duplicates
+    errors: dict[str, str]       # per-source error message, if any
+    items: list[SupplierProductOut]   # all rows from this search (new + existing)

@@ -1,14 +1,15 @@
 import { useMemo, useState } from "react";
 import {
-  Alert, Box, Button, Card, CardContent, Chip, Drawer, FormControl, Grid, IconButton, InputLabel,
-  MenuItem, Select, Stack, TextField, Typography,
+  Alert, Box, Button, Card, CardContent, Checkbox, Chip, Drawer, FormControl, FormControlLabel, FormGroup,
+  Grid, IconButton, InputLabel, LinearProgress, MenuItem, Select, Stack, TextField, Typography,
 } from "@mui/material";
 import CloseIcon from "@mui/icons-material/Close";
+import SearchIcon from "@mui/icons-material/Search";
 import { AgGridReact } from "ag-grid-react";
 import type { ColDef, ICellRendererParams } from "ag-grid-community";
 import { useNavigate } from "react-router-dom";
 
-import { useCategories, useCreateListing, useProduct, useProducts } from "../api/hooks";
+import { useCategories, useCreateListing, useProduct, useProducts, useSearchSuppliers } from "../api/hooks";
 import type { ProductFilters, SupplierProduct } from "../types";
 
 const SOURCES = [
@@ -36,6 +37,46 @@ export default function Discovery() {
   const categories = useCategories();
   const detail = useProduct(selectedId);
   const createListing = useCreateListing();
+  const searchSuppliers = useSearchSuppliers();
+
+  // Live-search panel state
+  const [supplierQuery, setSupplierQuery] = useState("");
+  const [searchAli, setSearchAli] = useState(true);
+  const [searchAmz, setSearchAmz] = useState(true);
+  const [lastSearchMsg, setLastSearchMsg] = useState<string | null>(null);
+  const [lastSearchErr, setLastSearchErr] = useState<string | null>(null);
+
+  const runSupplierSearch = async () => {
+    const q = supplierQuery.trim();
+    if (!q) return;
+    const sources: ("aliexpress_uk" | "amazon_uk")[] = [];
+    if (searchAli) sources.push("aliexpress_uk");
+    if (searchAmz) sources.push("amazon_uk");
+    if (sources.length === 0) {
+      setLastSearchErr("Pick at least one source.");
+      return;
+    }
+    setLastSearchErr(null); setLastSearchMsg(null);
+    try {
+      const r = await searchSuppliers.mutateAsync({ query: q, sources, limit_per_source: 30 });
+      const errParts = Object.entries(r.errors).map(([s, e]) => `${s}: ${e.slice(0, 80)}`);
+      setLastSearchMsg(
+        `Scraped "${r.query}" — ${r.inserted} new, ${r.skipped} already known.` +
+        (errParts.length ? `  Errors: ${errParts.join(" · ")}` : "")
+      );
+      // Re-apply the local filter to the just-scraped query so the grid focuses on it
+      setFilters((f) => ({ ...f, q, page: 1 }));
+    } catch (e: any) {
+      const detail = e?.response?.data?.detail;
+      setLastSearchErr(
+        typeof detail === "string"
+          ? detail
+          : detail?.message
+            ? `${detail.message}: ${JSON.stringify(detail.errors ?? {})}`
+            : "Search failed"
+      );
+    }
+  };
 
   const cols = useMemo<ColDef<SupplierProduct>[]>(() => [
     {
@@ -82,9 +123,46 @@ export default function Discovery() {
       <Box>
         <Typography variant="h4" sx={{ fontWeight: 800 }}>Discovery</Typography>
         <Typography variant="body2" color="text.secondary">
-          Browse UK supplier products, filter for the ones worth listing, drill in, then create a draft.
+          Search live UK suppliers, filter for the ones worth listing, drill in, then create a draft.
         </Typography>
       </Box>
+
+      {/* Live supplier search */}
+      <Card sx={{ borderColor: "primary.light" }}>
+        <CardContent>
+          <Stack direction={{ xs: "column", md: "row" }} spacing={2} alignItems={{ md: "center" }}>
+            <TextField
+              size="small" fullWidth label="Search live suppliers (e.g. wireless earbuds)"
+              value={supplierQuery}
+              onChange={(e) => setSupplierQuery(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") runSupplierSearch(); }}
+              sx={{ flex: 1 }}
+            />
+            <FormGroup row sx={{ flexShrink: 0 }}>
+              <FormControlLabel
+                control={<Checkbox size="small" checked={searchAli} onChange={(e) => setSearchAli(e.target.checked)} />}
+                label="AliExpress UK"
+              />
+              <FormControlLabel
+                control={<Checkbox size="small" checked={searchAmz} onChange={(e) => setSearchAmz(e.target.checked)} />}
+                label="Amazon UK"
+              />
+            </FormGroup>
+            <Button
+              variant="contained"
+              startIcon={<SearchIcon />}
+              onClick={runSupplierSearch}
+              disabled={searchSuppliers.isPending || !supplierQuery.trim()}
+              sx={{ flexShrink: 0 }}
+            >
+              {searchSuppliers.isPending ? "Scraping…" : "Scrape suppliers"}
+            </Button>
+          </Stack>
+          {searchSuppliers.isPending && <LinearProgress sx={{ mt: 1.5 }} />}
+          {lastSearchMsg && <Alert severity="success" sx={{ mt: 1.5 }}>{lastSearchMsg}</Alert>}
+          {lastSearchErr && <Alert severity="error" sx={{ mt: 1.5 }}>{lastSearchErr}</Alert>}
+        </CardContent>
+      </Card>
 
       {/* Filter bar */}
       <Card>

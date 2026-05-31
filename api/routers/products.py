@@ -1,16 +1,31 @@
+import asyncio
+import logging
 from typing import Annotated, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.adapters.aliexpress_uk import AliExpressUKAdapter
+from api.adapters.amazon_uk import AmazonUKAdapter
+from api.adapters.base import SupplierAdapter, SupplierProductRaw
+from api.adapters.normalizer import raw_to_orm
 from api.auth.deps import current_user
 from api.db import get_db
 from api.models.supplier_products import SupplierProduct
 from api.models.users import User
-from api.schemas.products import ProductListOut, SupplierProductDetailOut, SupplierProductOut
+from api.schemas.products import (
+    ProductListOut, SearchSupplierRequest, SearchSupplierResponse,
+    SupplierProductDetailOut, SupplierProductOut,
+)
 
+log = logging.getLogger(__name__)
 router = APIRouter()
+
+ADAPTERS: dict[str, SupplierAdapter] = {
+    "aliexpress_uk": AliExpressUKAdapter(),
+    "amazon_uk":     AmazonUKAdapter(),
+}
 
 
 @router.get("", response_model=ProductListOut)
@@ -82,6 +97,89 @@ async def list_products(
     return ProductListOut(
         items=[SupplierProductOut.model_validate(r) for r in rows],
         total=total, page=page, page_size=page_size,
+    )
+
+
+@router.post("/search", response_model=SearchSupplierResponse)
+async def search_suppliers(
+    payload: SearchSupplierRequest,
+    user: Annotated[User, Depends(current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Run live searches against the configured supplier adapters and persist
+    new (source, external_id) rows to the local catalog. Existing rows are
+    skipped (no upsert in v1) — they remain queryable via GET /api/products."""
+    query = payload.query.strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="query is required")
+
+    unknown = [s for s in payload.sources if s not in ADAPTERS]
+    if unknown:
+        raise HTTPException(status_code=400, detail=f"Unknown source(s): {unknown}")
+
+    # Run adapter searches concurrently — each adapter is sealed to its own module.
+    async def _safe(name: str) -> tuple[str, list[SupplierProductRaw] | Exception]:
+        try:
+            rows = await ADAPTERS[name].search(query)
+            return name, rows[: payload.limit_per_source]
+        except Exception as e:
+            log.warning("adapter %s search failed: %s", name, e)
+            return name, e
+
+    results = await asyncio.gather(*(_safe(s) for s in payload.sources))
+
+    errors: dict[str, str] = {}
+    raws: list[SupplierProductRaw] = []
+    for name, res in results:
+        if isinstance(res, Exception):
+            errors[name] = f"{type(res).__name__}: {res}"
+        else:
+            raws.extend(res)
+
+    if not raws and errors:
+        # Every adapter failed — surface as 502 so the UI shows a clear failure.
+        raise HTTPException(status_code=502, detail={"message": "All adapters failed", "errors": errors})
+
+    # Dedup against existing (source, external_id) pairs to avoid duplicate rows
+    # (the schema doesn't currently have a unique constraint — Phase-3 addition).
+    incoming_keys = [(r.source, r.external_id) for r in raws if r.external_id]
+    existing_ids: set[tuple[str, str]] = set()
+    if incoming_keys:
+        rows = (await db.execute(
+            select(SupplierProduct.source, SupplierProduct.external_id).where(
+                SupplierProduct.external_id.in_({k[1] for k in incoming_keys})
+            )
+        )).all()
+        existing_ids = {(r.source, r.external_id) for r in rows}
+
+    inserted = 0
+    skipped = 0
+    for raw in raws:
+        key = (raw.source, raw.external_id) if raw.external_id else None
+        if key and key in existing_ids:
+            skipped += 1
+            continue
+        orm = raw_to_orm(raw)
+        orm.discovered_by_user_id = user.id
+        db.add(orm)
+        inserted += 1
+    if inserted:
+        await db.commit()
+
+    # Return all rows (newly inserted + already-known) that match the query, so
+    # the UI's grid can refresh with the latest catalog state.
+    ext_ids = [r.external_id for r in raws if r.external_id]
+    items: list[SupplierProductOut] = []
+    if ext_ids:
+        fetched = (await db.execute(
+            select(SupplierProduct).where(
+                SupplierProduct.external_id.in_(ext_ids)
+            ).order_by(SupplierProduct.overall_score.desc())
+        )).scalars().all()
+        items = [SupplierProductOut.model_validate(r) for r in fetched]
+
+    return SearchSupplierResponse(
+        query=query, inserted=inserted, skipped=skipped, errors=errors, items=items,
     )
 
 
