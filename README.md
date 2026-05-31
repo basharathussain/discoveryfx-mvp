@@ -29,7 +29,7 @@ UK-first dropshipping product-discovery MVP.
 ## Run it
 
 > **Note on ports:** the `test` branch uses VPS ports (`12091` web, `12092` api). The
-> `main` and `deployment` branches use the original dev ports (`3001` web, `8081` api).
+> `main` and `development` branches use the original dev ports (`3001` web, `8081` api).
 > Numbers below assume you're on the `test` branch (which is what you cloned if you
 > followed `deploy/README.md`).
 
@@ -99,7 +99,7 @@ Full VPS setup details: see [`deploy/README.md`](./deploy/README.md).
                   └────► worker (RQ, idle in Phase 1) ─────────┘
 ```
 
-Ports above are for the **test branch** (VPS layout). The `main` / `deployment`
+Ports above are for the **test branch** (VPS layout). The `main` / `development`
 branches expose `web:3001`, `api:8081`, `postgres:5440` for local dev convenience.
 
 - All Python in `api/`, all TS/React in `web/`
@@ -164,7 +164,7 @@ adapter shape is wrong — fix the adapter, not the consumer.
    ```
    EBAY_CLIENT_ID=YourSandboxAppID
    EBAY_CLIENT_SECRET=YourSandboxCertID
-   # Localhost dev (main/deployment branch):
+   # Localhost dev (main/development branch):
    EBAY_REDIRECT_URI=http://localhost:12092/api/stores/ebay/callback
    # VPS test branch:
    # EBAY_REDIRECT_URI=http://109.199.121.116:12091/api/stores/ebay/callback
