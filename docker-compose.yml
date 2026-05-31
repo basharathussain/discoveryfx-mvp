@@ -15,8 +15,8 @@ services:
       test: ["CMD-SHELL", "pg_isready -U discoveryfx"]
       interval: 5s
       retries: 10
-    ports:
-      - "5440:5432"
+    # VPS: postgres is internal-only (no public port binding).
+    # Reach via `docker exec -it discoveryfx-postgres psql -U discoveryfx`.
 
   redis:
     image: redis:7-alpine
@@ -49,7 +49,7 @@ services:
       redis:
         condition: service_healthy
     ports:
-      - "8081:8000"
+      - "12092:8000"
     volumes:
       - ./:/app
     command: >
@@ -88,7 +88,7 @@ services:
     depends_on:
       - api
     ports:
-      - "3001:80"
+      - "12091:80"
 
 volumes:
   pg_data:
