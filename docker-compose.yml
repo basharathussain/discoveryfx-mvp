@@ -1,0 +1,94 @@
+name: discoveryfx
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: discoveryfx-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: discoveryfx
+      POSTGRES_USER: discoveryfx
+      POSTGRES_PASSWORD: discoveryfx
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U discoveryfx"]
+      interval: 5s
+      retries: 10
+    ports:
+      - "5440:5432"
+
+  redis:
+    image: redis:7-alpine
+    container_name: discoveryfx-redis
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: discoveryfx-api
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://discoveryfx:discoveryfx@postgres:5432/discoveryfx
+      REDIS_URL: redis://redis:6379/0
+      JWT_SECRET: ${JWT_SECRET:-dev-secret-change-me}
+      EBAY_ENV: ${EBAY_ENV:-sandbox}
+      EBAY_CLIENT_ID: ${EBAY_CLIENT_ID:-}
+      EBAY_CLIENT_SECRET: ${EBAY_CLIENT_SECRET:-}
+      EBAY_REDIRECT_URI: ${EBAY_REDIRECT_URI:-http://localhost:8081/api/stores/ebay/callback}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8081:8000"
+    volumes:
+      - ./:/app
+    command: >
+      sh -c "alembic upgrade head &&
+             python -m api.seed &&
+             uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload"
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: discoveryfx-worker
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://discoveryfx:discoveryfx@postgres:5432/discoveryfx
+      REDIS_URL: redis://redis:6379/0
+      EBAY_ENV: ${EBAY_ENV:-sandbox}
+      EBAY_CLIENT_ID: ${EBAY_CLIENT_ID:-}
+      EBAY_CLIENT_SECRET: ${EBAY_CLIENT_SECRET:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./:/app
+    command: ["python", "-m", "api.workers.worker"]
+
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    container_name: discoveryfx-web
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "3001:80"
+
+volumes:
+  pg_data:
