@@ -28,6 +28,11 @@ UK-first dropshipping product-discovery MVP.
 
 ## Run it
 
+> **Note on ports:** the `test` branch uses VPS ports (`12091` web, `12092` api). The
+> `main` and `deployment` branches use the original dev ports (`3001` web, `8081` api).
+> Numbers below assume you're on the `test` branch (which is what you cloned if you
+> followed `deploy/README.md`).
+
 ```bash
 cd _src
 docker compose up -d --build
@@ -35,17 +40,19 @@ docker compose up -d --build
 
 Then visit:
 
-- Web app: <http://localhost:3001>
-- API docs: <http://localhost:8081/docs>
-- Health: <http://localhost:8081/api/health>
+- Web app: <http://localhost:12091>
+- API docs: <http://localhost:12092/docs>
+- Health: <http://localhost:12092/api/health>
 
-Sign up with any email/password (min 8 chars). The Discovery page loads the 30 seeded
-products sorted by overall score. Click any row to see the detail drawer with score
-inputs, then "Create draft listing" to push a row into the Listings page.
+Sign up with any email/password (min 8 chars) — or use the demo account seeded
+automatically on every fresh DB:
 
-A demo user already exists from smoke testing:
 - Email: `demo@example.com`
 - Password: `demopass123`
+
+The Discovery page loads the 30 seeded products sorted by overall score. Click any
+row to see the detail drawer with score inputs, then "Create draft listing" to push
+a row into the Listings page.
 
 To reset state and start clean:
 
@@ -54,22 +61,46 @@ docker compose down -v
 docker compose up -d --build
 ```
 
+## Test server
+
+The `test` branch is deployed to a staging VPS. Live URLs:
+
+| What | Where |
+|---|---|
+| Web app | <http://109.199.121.116:12091> |
+| API (direct) | <http://109.199.121.116:12092/docs> |
+| API (via web proxy) | <http://109.199.121.116:12091/api/health> |
+
+The demo credentials above work on the test server too — they're seeded by
+`api/seed.py` every time the api container boots against a fresh database.
+
+Ongoing deploy from your Mac (after `git push origin test`):
+
+```bash
+ssh eztrove-vps 'cd /opt/discoveryfx-mvp && ./deploy/deploy.sh'
+```
+
+Full VPS setup details: see [`deploy/README.md`](./deploy/README.md).
+
 ---
 
 ## Architecture
 
 ```
             ┌─────────────┐
-            │  web (nginx)│   localhost:3001  ─── proxies /api/* ──┐
-            └─────────────┘                                         │
-                                                                    ▼
+            │  web (nginx)│   :12091  ─── proxies /api/* ──┐
+            └─────────────┘                                 │
+                                                            ▼
             ┌──────────────┐      ┌──────────────┐      ┌──────────────┐
             │   api (FastAPI)─────┤   postgres    │      │     redis     │
-            │   port 8081  │      │   port 5440  │      │   (internal)  │
+            │   :12092     │      │  (internal)  │      │   (internal)  │
             └──────────────┘      └──────────────┘      └──────────────┘
                   │                                            ▲
                   └────► worker (RQ, idle in Phase 1) ─────────┘
 ```
+
+Ports above are for the **test branch** (VPS layout). The `main` / `deployment`
+branches expose `web:3001`, `api:8081`, `postgres:5440` for local dev convenience.
 
 - All Python in `api/`, all TS/React in `web/`
 - One source of truth for env vars: `.env` at the project root (compose loads it for api+worker)
@@ -133,7 +164,10 @@ adapter shape is wrong — fix the adapter, not the consumer.
    ```
    EBAY_CLIENT_ID=YourSandboxAppID
    EBAY_CLIENT_SECRET=YourSandboxCertID
-   EBAY_REDIRECT_URI=http://localhost:8081/api/stores/ebay/callback
+   # Localhost dev (main/deployment branch):
+   EBAY_REDIRECT_URI=http://localhost:12092/api/stores/ebay/callback
+   # VPS test branch:
+   # EBAY_REDIRECT_URI=http://109.199.121.116:12091/api/stores/ebay/callback
    ```
 3. Implement `api/routers/stores.py` `ebay_connect_start()` (redirect to eBay consent URL) and `ebay_callback()` (exchange `code` for tokens, persist on `stores`).
 4. Implement `api/ebay/client.py`:
@@ -162,24 +196,28 @@ returns 501 with a clear message until credentials are configured.
 
 ## Tests / verification
 
-Manual smoke test (already passes):
+Manual smoke test (already passes). Replace `BASE` to point at local or VPS:
 
 ```bash
-# health
-curl http://localhost:8081/api/health
+# Pick one:
+BASE=http://localhost:12092      # test branch local
+# BASE=http://109.199.121.116:12092   # test server
 
-# signup
-TOKEN=$(curl -s -X POST http://localhost:8081/api/auth/signup \
+# health
+curl $BASE/api/health
+
+# log in as the seeded demo user
+TOKEN=$(curl -s -X POST $BASE/api/auth/login \
   -H 'Content-Type: application/json' \
-  -d '{"email":"user@example.com","password":"testpass123"}' \
+  -d '{"email":"demo@example.com","password":"demopass123"}' \
   | python3 -c "import sys, json; print(json.load(sys.stdin)['access_token'])")
 
 # products
-curl -s "http://localhost:8081/api/products?page=1&page_size=3" \
+curl -s "$BASE/api/products?page=1&page_size=3" \
   -H "Authorization: Bearer $TOKEN"
 
 # create draft listing
-curl -s -X POST http://localhost:8081/api/listings \
+curl -s -X POST $BASE/api/listings \
   -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"supplier_product_id":1}'

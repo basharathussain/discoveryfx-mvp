@@ -170,35 +170,63 @@ FIXTURES: list[dict] = [
 ]
 
 
+DEMO_EMAIL = "demo@example.com"
+DEMO_PASSWORD = "demopass123"
+
+
+async def _seed_demo_user(db) -> None:
+    """Idempotent: create demo@example.com if absent so the README credentials always work."""
+    from api.auth.password import hash_password
+    from api.models.users import User
+    from api.models.markup_rules import MarkupRule
+
+    existing = (await db.execute(select(User).where(User.email == DEMO_EMAIL))).scalar_one_or_none()
+    if existing:
+        print(f"[seed] demo user already exists (id={existing.id}).")
+        return
+    user = User(email=DEMO_EMAIL, password_hash=hash_password(DEMO_PASSWORD))
+    db.add(user)
+    await db.flush()
+    db.add(MarkupRule(user_id=user.id))
+    await db.commit()
+    print(f"[seed] created demo user {DEMO_EMAIL} (id={user.id}) with default markup rule.")
+
+
+async def _seed_products(db) -> None:
+    """Idempotent: insert fixture products if the table is under target size."""
+    existing = (await db.execute(select(func.count(SupplierProduct.id)))).scalar_one()
+    if existing >= len(FIXTURES):
+        print(f"[seed] {existing} products already present, skipping.")
+        return
+
+    rows = []
+    for f in FIXTURES:
+        raw = SupplierProductRaw(
+            source=f["source"],
+            supplier_name=f["supplier_name"],
+            supplier_rating=f["supplier_rating"],
+            product_url=f"https://example.invalid/seed/{f['source']}/{f['external_id']}",
+            external_id=f["external_id"],
+            title=f["title"],
+            image=f["image"],
+            category=f["category"],
+            currency="GBP",
+            cost_price=Decimal(f["cost_price"]),
+            shipping_cost=Decimal(f["shipping_cost"]),
+            orders_count=f["orders_count"],
+            reviews_count=f["reviews_count"],
+        )
+        rows.append(raw_to_orm(raw))
+
+    db.add_all(rows)
+    await db.commit()
+    print(f"[seed] inserted {len(rows)} fixture products.")
+
+
 async def seed() -> None:
     async with SessionLocal() as db:
-        existing = (await db.execute(select(func.count(SupplierProduct.id)))).scalar_one()
-        if existing >= len(FIXTURES):
-            print(f"[seed] {existing} products already present, skipping.")
-            return
-
-        rows = []
-        for f in FIXTURES:
-            raw = SupplierProductRaw(
-                source=f["source"],
-                supplier_name=f["supplier_name"],
-                supplier_rating=f["supplier_rating"],
-                product_url=f"https://example.invalid/seed/{f['source']}/{f['external_id']}",
-                external_id=f["external_id"],
-                title=f["title"],
-                image=f["image"],
-                category=f["category"],
-                currency="GBP",
-                cost_price=Decimal(f["cost_price"]),
-                shipping_cost=Decimal(f["shipping_cost"]),
-                orders_count=f["orders_count"],
-                reviews_count=f["reviews_count"],
-            )
-            rows.append(raw_to_orm(raw))
-
-        db.add_all(rows)
-        await db.commit()
-        print(f"[seed] inserted {len(rows)} fixture products.")
+        await _seed_products(db)
+        await _seed_demo_user(db)
 
 
 if __name__ == "__main__":
