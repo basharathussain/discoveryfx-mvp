@@ -47,9 +47,9 @@ ssh eztrove-vps 'cd /opt/discoveryfx-mvp && ./deploy/deploy.sh'
 
 `deploy.sh` does: `git pull origin test` → `docker compose up -d --build` → smoke-test.
 
-## What's different from the `deployment` branch (localhost)
+## What's different from the `development` branch (localhost)
 
-| Concern | `deployment` (localhost) | `test` (VPS) |
+| Concern | `development` (localhost) | `test` (VPS) |
 |---|---|---|
 | Web port | `3001:80` | `12091:80` |
 | API port | `8081:8000` | `12092:8000` |
