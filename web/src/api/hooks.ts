@@ -34,6 +34,29 @@ export const useMe = (enabled = true) =>
   });
 
 // ---- Products ----
+export interface SearchSupplierRequest {
+  query: string;
+  sources?: ("aliexpress_uk" | "amazon_uk")[];
+  limit_per_source?: number;
+}
+
+export interface SearchSupplierResponse {
+  query: string;
+  inserted: number;
+  skipped: number;
+  errors: Record<string, string>;
+  items: import("../types").SupplierProduct[];
+}
+
+export const useSearchSuppliers = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: SearchSupplierRequest) =>
+      apiClient.post<SearchSupplierResponse>("/products/search", body).then((r) => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["products"] }),
+  });
+};
+
 export const useProducts = (filters: ProductFilters) =>
   useQuery({
     queryKey: ["products", filters],
